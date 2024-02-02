@@ -1,0 +1,36 @@
+[updates]
+name=Fedora 39 - x86_64 - Updates
+#baseurl=http://download.example/pub/fedora/linux/updates/39/Everything/x86_64/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=updates-released-f39&arch=x86_64
+enabled=1
+countme=1
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+metadata_expire=6h
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False
+
+[updates-debuginfo]
+name=Fedora 39 - x86_64 - Updates - Debug
+#baseurl=http://download.example/pub/fedora/linux/updates/39/Everything/x86_64/debug/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=updates-released-debug-f39&arch=x86_64
+enabled=0
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+metadata_expire=6h
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False
+
+[updates-source]
+name=Fedora 39 - Updates Source
+#baseurl=http://download.example/pub/fedora/linux/updates/39/Everything/SRPMS/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=updates-released-source-f39&arch=x86_64
+enabled=0
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+metadata_expire=6h
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False

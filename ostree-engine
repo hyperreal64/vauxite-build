@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+
+import argparse
+import datetime as dt
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from glob import glob
+from pathlib import Path
+
+if os.geteuid() != 0:
+    exit("Please run this script with sudo")
+
+BASE_DIR = Path("/home/jas/vauxite")
+OSTREE_FILES_DIR = BASE_DIR.joinpath("src")
+CACHE_DIR = BASE_DIR.joinpath(".cache")
+BUILD_REPO = BASE_DIR.joinpath(".build-repo")
+SOURCE_REPO = BASE_DIR.joinpath(".source-repo")
+DEPLOY_REPO = BASE_DIR.joinpath(".deploy-repo")
+WK_DIR = BASE_DIR.joinpath(".tmp")
+
+parser = argparse.ArgumentParser()
+group = parser.add_mutually_exclusive_group()
+group.add_argument(
+    "--nodeploy",
+    required=False,
+    action="store_true",
+    help="Do not deploy repo to web server root",
+)
+group.add_argument(
+    "--onlydeploy",
+    required=False,
+    action="store_true",
+    help="Skip the build steps and only deploy repo to web server root",
+)
+parser.add_argument(
+    "--sourceurl",
+    required=False,
+    action="store",
+    default="https://pagure.io/workstation-ostree-config",
+    help="URL for source repo",
+)
+parser.add_argument(
+    "--sourcebranch",
+    required=True,
+    action="store",
+    help="Branch of source repo",
+)
+parser.add_argument(
+    "--treefile",
+    required=False,
+    action="store",
+    default="vauxite.yaml",
+    help="Treefile to use for rpm-ostree",
+)
+parser.add_argument(
+    "--ostreebranch",
+    required=True,
+    action="store",
+    help="Name of ref branch",
+)
+parser.add_argument(
+    "--destrepo",
+    required=False,
+    action="store",
+    default="/srv/repo",
+    help="Destination for rsync-repos",
+)
+
+args = parser.parse_args()
+
+
+def print_log(msg: str):
+    if sys.stdout.isatty():
+        log_date = dt.datetime.now().isoformat(" ", "seconds")
+        print("%s: %s" % (log_date, msg))
+    else:
+        print(msg)
+
+
+def handle_err():
+    print_log("ERROR:")
+    print("{}" % sys.exc_info()[0])
+    print("{}" % sys.exc_info()[1])
+    print("{}" % sys.exc_info()[2])
+    exit(1)
+
+
+def clean_wk_dir():
+    try:
+        print_log("Clean working directory")
+        shutil.rmtree(CACHE_DIR)
+        shutil.rmtree(SOURCE_REPO)
+        shutil.rmtree(WK_DIR)
+        for dir in glob("/tmp/rpmostree*", recursive=True):
+            shutil.rmtree(dir)
+    except FileNotFoundError as ferr:
+        pass
+    except Exception:
+        handle_err()
+
+
+def run_proc(cmd: str, capture_output=False) -> subprocess.CompletedProcess:
+    try:
+        if capture_output:
+            return subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+
+        return subprocess.run(shlex.split(cmd), check=True, text=True)
+    except subprocess.CalledProcessError:
+        handle_err()
+
+
+def prepare_build_env():
+    clean_wk_dir()
+
+    print_log("Ensure CACHE_DIR exists")
+    CACHE_DIR.mkdir(exist_ok=True)
+
+    print_log("Ensure WK_DIR exists")
+    WK_DIR.mkdir(exist_ok=True)
+
+    print_log("Remove previous BUILD_REPO if it exists")
+    shutil.rmtree(BUILD_REPO, ignore_errors=True)
+
+    print_log("Initialize ostree repo in bare-user mode")
+    run_proc(f"ostree --repo={BUILD_REPO} init --mode=bare-user")
+
+    if not DEPLOY_REPO.exists():
+        print_log("Deploy repo not found; initialize new deploy repo in archive mode")
+        run_proc(f"ostree --repo={BUILD_REPO} init --mode=archive")
+    else:
+        print_log("Pull existing deploy repo into local build repo")
+        run_proc(
+            f"ostree --repo={BUILD_REPO} pull-local --depth=2 {DEPLOY_REPO} {args.ostreebranch}"
+        )
+
+    if not SOURCE_REPO.exists():
+        print_log(
+            f"Clone branch {args.sourcebranch} of {args.sourceurl} into SOURCE_REPO"
+        )
+        run_proc(f"git clone -b {args.sourcebranch} {args.sourceurl} {SOURCE_REPO}")
+
+    print_log("Copy SOURCE_REPO contents into WK_DIR")
+    run_proc(f"rsync -aAX {SOURCE_REPO}/ {WK_DIR}")
+
+    print_log("Remove upstream xfce-desktop-pkgs.yaml from WK_DIR")
+    WK_DIR.joinpath("xfce-desktop-pkgs.yaml").unlink(missing_ok=True)
+
+    print_log("Copy OSTREE_FILES_DIR contents into WK_DIR")
+    run_proc(f"rsync -aAX {OSTREE_FILES_DIR}/ {WK_DIR}")
+
+
+def compose_ostree():
+    print_log("Compose ostree")
+    time_fmt = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+    run_proc(
+        subprocess.list2cmdline(
+            [
+                "rpm-ostree",
+                "compose",
+                "tree",
+                "--unified-core",
+                f"--cachedir={CACHE_DIR}",
+                f"--repo={BUILD_REPO}",
+                f"--add-metadata-string=Build={time_fmt}",
+                WK_DIR.joinpath(args.treefile),
+            ]
+        )
+    )
+
+
+def prepare_deploy():
+    print_log("Prune refs older than 30 days")
+    run_proc(
+        f"ostree --repo={BUILD_REPO} prune --refs-only --keep-younger-than='30 days ago'"
+    )
+
+    print_log("Pull new ostree commit into DEPLOY_REPO")
+    run_proc(
+        f"ostree --repo={DEPLOY_REPO} pull-local --depth=1 {BUILD_REPO} {args.ostreebranch}"
+    )
+
+    print_log("Remove local build repo")
+    shutil.rmtree(BUILD_REPO, ignore_errors=True)
+
+    print_log("Check filesystem for errors")
+    run_proc(f"ostree --repo={DEPLOY_REPO} fsck {args.ostreebranch}")
+
+
+def generate_deltas():
+    print_log("Check if main ref has parent")
+    check_parent = run_proc(
+        f"ostree --repo={DEPLOY_REPO} show {args.ostreebranch}", capture_output=True
+    )
+
+    if not check_parent.stderr:
+        print_log("Generate static delta from main ref's parent")
+        run_proc(
+            f"ostree --repo={DEPLOY_REPO} static-delta generate {args.ostreebranch}"
+        )
+
+        print_log("Check if main ref's parent has parent")
+        check_gparent = run_proc(
+            f"ostree --repo={DEPLOY_REPO} show {args.ostreebranch}^^",
+            capture_output=True,
+        )
+
+        if not check_gparent.stderr:
+            print_log("Generate static delta from parent of main ref's parent")
+            run_proc(
+                f"ostree --repo={DEPLOY_REPO} static-delta generate --from={args.ostreebranch}^^ --to={args.ostreebranch}"
+            )
+        else:
+            print_log("Main ref's parent has no parent. No deltas generated.")
+    else:
+        print_log("Main ref has no parent. No deltas generated.")
+
+
+def update_summary():
+    print_log("Update summary file of DEPLOY_REPO")
+    run_proc(f"ostree --repo={DEPLOY_REPO} summary -u")
+
+
+def deploy_repo():
+    print_log("Deploying repo to web server root")
+    if DEPLOY_REPO.exists():
+        run_proc(f"{BASE_DIR}/rsync-repos --src {DEPLOY_REPO} --dest {args.destrepo}")
+    else:
+        print_log("DEPLOY_REPO not found. Not deploying to web server")
+
+
+if __name__ == "__main__":
+    if args.nodeploy:
+        prepare_build_env()
+        compose_ostree()
+        prepare_deploy()
+        generate_deltas()
+        update_summary()
+    elif args.onlydeploy:
+        deploy_repo()
+    else:
+        prepare_build_env()
+        compose_ostree()
+        prepare_deploy()
+        generate_deltas()
+        update_summary()
+        deploy_repo()

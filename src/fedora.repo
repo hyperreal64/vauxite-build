@@ -1,0 +1,36 @@
+[fedora]
+name=Fedora 39 - x86_64
+#baseurl=http://download.example/pub/fedora/linux/releases/39/Everything/x86_64/os/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-39&arch=x86_64
+enabled=1
+countme=1
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False
+
+[fedora-debuginfo]
+name=Fedora 39 - x86_64 - Debug
+#baseurl=http://download.example/pub/fedora/linux/releases/39/Everything/x86_64/debug/tree/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-debug-39&arch=x86_64
+enabled=0
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False
+
+[fedora-source]
+name=Fedora 39 - Source
+#baseurl=http://download.example/pub/fedora/linux/releases/39/Everything/source/tree/
+metalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-source-39&arch=x86_64
+enabled=0
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-39-x86_64
+skip_if_unavailable=False
