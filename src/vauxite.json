@@ -1,0 +1,40 @@
+{
+  "ref": "vauxite/f39/x86_64/main",
+  "include": "xfce-desktop-pkgs.yaml",
+  "packages": [
+    "borgbackup",
+    "borgmatic",
+    "cronie",
+    "distrobox",
+    "fedora-release-ostree-desktop",
+    "fontconfig-enhanced-defaults",
+    "fontconfig-font-replacements",
+    "rofi",
+    "snapper",
+    "vim-default-editor",
+    "xfce4-cpugraph-plugin",
+    "xfce4-genmon-plugin",
+    "xfce4-weather-plugin"
+  ],
+  "repos": [
+    "fedora",
+    "updates",
+    "copr:copr.fedorainfracloud.org:hyperreal:better_fonts"
+  ],
+  "add-files": [
+    [
+      "borgmatic-config.yaml",
+      "/etc/borgmatic/config.yaml"
+    ],
+    [
+      "user-dirs.defaults",
+      "/etc/xdg/user-dirs.defaults"
+    ]
+  ],
+  "units": [
+    "snapper-cleanup.timer",
+    "snapper-timeline.timer"
+  ],
+  "cliwrap": true,
+  "readonly-executables": true
+}

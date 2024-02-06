@@ -1,0 +1,24 @@
+source_directories:
+  - /var/home
+  - /etc
+  - /usr/local
+repositories:
+  - path: /srv/backup/localhost
+    label: localhost-backup
+exclude_caches: true
+compression: zstd
+relocated_repo_access_is_ok: true
+unknown_unencrypted_repo_access_is_ok: true
+keep_daily: 7
+keep_weekly: 4
+keep_monthly: 6
+keep_yearly: 1
+checks:
+  - name: repository
+    frequency: 2 weeks
+  - name: archives
+    frequency: 2 weeks
+check_repositories:
+  - /srv/backup/localhost
+check_last: 3
+encryption_passcommand: secret-tool lookup borg-repo localhost
