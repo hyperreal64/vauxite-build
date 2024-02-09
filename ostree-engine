@@ -1,237 +1,157 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
 
-"""ostree-engine
+set -euo pipefail
 
-Usage:
-    ostree-engine ([--source-branch=BRANCH] [--source-url=URL] | --no-download-sources)
-                  [--ostree-branch=REF] [--treefile=TREEFILE]
-                  [--dest-repo=PATH] [--gpg-passfile=PATH]
-                  [--no-deploy] [--no-clean]
-    ostree-engine --version
+SOURCE_BRANCH="f39"
+SOURCE_URL="https://pagure.io/workstation-ostree-config"
+OSTREE_BRANCH="vauxite/f39/x86_64/main"
+DEST_REPO="/srv/repo"
+OSTREE_FILES_DIR="$(pwd)/src"
+CACHE_DIR="$(pwd)/.cache"
+BUILD_REPO="$(pwd)/.build-repo"
+SOURCE_REPO="$(pwd)/.source-repo"
+TMP_WORK_DIR="$(pwd)/.tmp"
+DEPLOY_REPO="$(pwd)/.deploy-repo"
+TREEFILE="${TMP_WORK_DIR}/vauxite.json"
 
-Options:
-    --no-deploy                 Do not deploy resulting ostree repo to web server root.
-    --no-clean                  Do not clean the working directory, i.e. .cache, .build-repo, .source-repo, .tmp
-    --no-download-sources       Do not download source repo.
-    --source-url=URL            URL for source repo. [default: https://pagure.io/workstation-ostree-config]
-    --source-branch=BRANCH      Branch of the source repo.
-    --treefile=TREEFILE         YAML or JSON treefile to use for rpm-ostree.
-    --ostree-branch=REF         Name of the ref branch.
-    --dest-repo=PATH            Local or remote filesystem destination for rsync-repos. Usually a web server root. [default: /srv/repo]
-    --gpg-passfile=PATH         Path to JSON file containing GPG key-id and passphrase (for auto signing commits).
-    --version                   Print version information.
-"""
+if [ "$(id -u)" != "0" ]; then
+    gum log --time datetime --level error "Please run build with sudo"
+    exit
+fi
 
-import datetime as dt
-import json
-import os
-import shlex
-import shutil
-import subprocess
-import sys
-from docopt import docopt
-from glob import glob
-from pathlib import Path
+function log_struc_info() {
+    gum log --time datetime --structured --level info "$@"
+}
 
-if os.geteuid() != 0:
-    exit("Please run this script with sudo")
+function log_info() {
+    gum log --time datetime --level info "$@"
+}
 
-BASE_DIR = Path("/var/local/vauxite")
-OSTREE_FILES_DIR = BASE_DIR.joinpath("src")
-CACHE_DIR = BASE_DIR.joinpath(".cache")
-BUILD_REPO = BASE_DIR.joinpath(".build-repo")
-SOURCE_REPO = BASE_DIR.joinpath(".source-repo")
-DEPLOY_REPO = BASE_DIR.joinpath(".deploy-repo")
-WK_DIR = BASE_DIR.joinpath(".tmp")
+function log_struc_error() {
+    gum log --time datetime --structured --level error "$@"
+}
 
+# Clean working directory
+log_struc_info "Clean cache directory" directory "${CACHE_DIR}"
+rm -rf "${CACHE_DIR}"
 
-def print_log(msg: str):
-    if sys.stdout.isatty():
-        log_date = dt.datetime.now().isoformat(" ", "seconds")
-        print("%s: %s" % (log_date, msg))
-    else:
-        print(msg)
+log_struc_info "Clean source repo" directory "${SOURCE_REPO}"
+rm -rf "${SOURCE_REPO}"
 
+log_struc_info "Clean temporary working directory" directory "${TMP_WORK_DIR}"
+rm -rf "${TMP_WORK_DIR}"
 
-def handle_err():
-    print_log("ERROR:")
-    print(f"{sys.exc_info()[0]}")
-    print(f"{sys.exc_info()[1]}")
-    print(f"{sys.exc_info()[2]}")
-    exit(1)
+log_struc_info "Clean /tmp/rpmostree*" files /tmp/rpmostree*
+rm -rf /tmp/rpmostree*
 
+log_struc_info "Clean build repo" directory "${BUILD_REPO}"
+rm -rf "${BUILD_REPO}"
 
-def clean_wk_dir():
-    try:
-        print_log("Clean working directory")
-        shutil.rmtree(CACHE_DIR)
-        if not args.get("--no-download-sources"):
-            shutil.rmtree(SOURCE_REPO)
-        shutil.rmtree(WK_DIR)
-        for dir in glob("/tmp/rpmostree*", recursive=True):
-            shutil.rmtree(dir)
-    except FileNotFoundError as ferr:
-        pass
-    except Exception:
-        handle_err()
+# Prepare build env
+log_struc_info "Ensure cache directory exists" directory "${CACHE_DIR}"
+mkdir -p "${CACHE_DIR}"
 
+log_struc_info "Ensure temporary working directory exists" directory "${TMP_WORK_DIR}"
+mkdir -p "${TMP_WORK_DIR}"
 
-def run_proc(cmd: str, capture_output=False) -> subprocess.CompletedProcess:
-    try:
-        if capture_output:
-            return subprocess.run(shlex.split(cmd), capture_output=True, text=True)
+if [ -d "${DEPLOY_REPO}" ] && [ -n "$(ls "${DEPLOY_REPO}")" ]; then
+    log_info "Deploy repo found. Initialize ostree repo in bare-user mode."
+    if ! ostree --repo="${BUILD_REPO}" init --mode=bare-user; then
+        log_struc_error "Error initializing ostree repo in bare-user mode" status "$?"
+        exit
+    fi
 
-        return subprocess.run(shlex.split(cmd), check=True, text=True)
-    except subprocess.CalledProcessError:
-        handle_err()
+    log_info "Pull existing deploy repo into local build repo"
+    if ! ostree --repo="${BUILD_REPO}" pull-local --depth=2 "${DEPLOY_REPO}" "${OSTREE_BRANCH}"; then
+        log_struc_error "Error pulling existing deploy repo into local build repo" status "$?"
+        exit
+    fi
+else
+    log_info "Deploy repo not found. Initialize new deploy repo in archive mode."
+    if ! ostree --repo="${BUILD_REPO}" init --mode=archive; then
+        log_struc_error "Error initializing new deploy repo in archive mode" status "$?"
+        exit
+    fi
+fi
 
+log_struc_info "Clone source repo" url "${SOURCE_URL}" branch "${SOURCE_BRANCH}" directory "${SOURCE_REPO}"
+if ! git clone -b "${SOURCE_BRANCH}" "${SOURCE_URL}" "${SOURCE_REPO}"; then
+    log_struc_error "Error cloning source repo" status "$?"
+    exit
+fi
 
-def prepare_build_env():
-    if not args.get("--no-clean"):
-        clean_wk_dir()
+log_struc_info "Copy contents of source repo into temporary work directory" source_repo "${SOURCE_REPO}" directory "${TMP_WORK_DIR}"
+rsync -aAX "${SOURCE_REPO}"/ "${TMP_WORK_DIR}"
 
-    print_log("Ensure CACHE_DIR exists")
-    CACHE_DIR.mkdir(exist_ok=True)
+log_struc_info "Remove upstream xfce-desktop-pkgs.yaml from temporary work directory" file xfce-desktop-pkgs.yaml directory "${TMP_WORK_DIR}"
+rm -f "${TMP_WORK_DIR}"/xfce-desktop-pkgs.yaml
 
-    print_log("Ensure WK_DIR exists")
-    WK_DIR.mkdir(exist_ok=True)
+log_struc_info "Copy contents of ostree files directory into temporary work directory" source "${OSTREE_FILES_DIR}" dest "${TMP_WORK_DIR}"
+rsync -aAX "${OSTREE_FILES_DIR}"/ "${TMP_WORK_DIR}"
 
-    print_log("Remove previous BUILD_REPO if it exists")
-    shutil.rmtree(BUILD_REPO, ignore_errors=True)
+# Compose ostree
+METADATA_STR="$(date '+%Y-%m-%dT%H%M%S')"
+log_struc_info "Compose ostree" cachedir "${CACHE_DIR}" repo "${BUILD_REPO}" metadata-string "${METADATA_STR}" treefile "${TREEFILE}"
+if ! rpm-ostree compose tree --unified-core --cachedir="${CACHE_DIR}" --repo="${BUILD_REPO}" --add-metadata-string=Build="${METADATA_STR}" "${TREEFILE}"; then
+    log_struc_error "Error composing ostree" status "$?"
+    exit
+fi
 
-    print_log("Initialize ostree repo in bare-user mode")
-    run_proc(f"ostree --repo={BUILD_REPO} init --mode=bare-user")
+# Prepare deploy
+log_info "Prune refs older than 30 days"
+if ! ostree --repo="${BUILD_REPO}" prune --refs-only --keep-younger-than='30 days ago'; then
+    log_struc_error "Error pruning refs" status "$?"
+    exit
+fi
 
-    if not DEPLOY_REPO.exists():
-        print_log("Deploy repo not found; initialize new deploy repo in archive mode")
-        run_proc(f"ostree --repo={BUILD_REPO} init --mode=archive")
-    else:
-        print_log("Pull existing deploy repo into local build repo")
-        run_proc(
-            f"ostree --repo={BUILD_REPO} pull-local --depth=2 {DEPLOY_REPO} {args.get("--ostree-branch")}"
-        )
+log_struc_info "Pull new ostree commit into deploy repo" deploy_repo "${DEPLOY_REPO}"
+if ! ostree --repo="${DEPLOY_REPO}" pull-local --depth=1 "${BUILD_REPO}" "${OSTREE_BRANCH}"; then
+    log_struc_error "Error pulling new ostree commit into deploy repo" status "$?"
+    exit
+fi
 
-    if not SOURCE_REPO.exists():
-        print_log(
-            f"Clone branch {args.get("--source-branch")} of {args.get("--source-url")} into SOURCE_REPO"
-        )
-        run_proc(f"git clone -b {args.get("--source-branch")} {args.get("--source-url")} {SOURCE_REPO}")
+log_struc_info "Remove local build repo" build_repo "${BUILD_REPO}"
+rm -rf "${BUILD_REPO}"
 
-    print_log("Copy SOURCE_REPO contents into WK_DIR")
-    run_proc(f"rsync -aAX {SOURCE_REPO}/ {WK_DIR}")
+log_struc_info "Check filesystem for errors" deploy_repo "${DEPLOY_REPO}" ostree_branch "${OSTREE_BRANCH}"
+if ! ostree --repo="${DEPLOY_REPO}" fsck "${OSTREE_BRANCH}"; then
+    log_struc_error "Error checking filesystem for errors" status "$?"
+    exit
+fi
 
-    print_log("Remove upstream xfce-desktop-pkgs.yaml from WK_DIR")
-    WK_DIR.joinpath("xfce-desktop-pkgs.yaml").unlink(missing_ok=True)
+# Generate deltas
+log_info "Check if main ref has parent"
+if ! ostree --repo="${DEPLOY_REPO}" show "${OSTREE_BRANCH}"; then
+    log_info "Main ref has no parent. No deltas will be generated."
+else
+    log_info "Generate static delta from main ref's parent"
+    if ! ostree --repo="${DEPLOY_REPO}" static-delta generate "${OSTREE_BRANCH}"; then
+        log_struc_error "Error generating static delta from main ref's parent" status "$?"
+        exit
+    fi
 
-    print_log("Copy OSTREE_FILES_DIR contents into WK_DIR")
-    run_proc(f"rsync -aAX {OSTREE_FILES_DIR}/ {WK_DIR}")
+    log_info "Check if main ref has grandparent"
+    if ! ostree --repo="${DEPLOY_REPO}" show "${OSTREE_BRANCH}"^^; then
+        log_info "Main ref has no grandparent. No grand-deltas will be generated."
+    else
+        log_info "Generate static delta from main ref's grandparent"
+        if ! ostree --repo="${DEPLOY_REPO}" static-delta generate --from="${OSTREE_BRANCH}"^^ --to="${OSTREE_BRANCH}"; then
+            log_struc_error "Error generating static delta from main ref's grandparent."
+            exit
+        fi
+    fi
+fi
 
+# Update summary
+log_struc_info "Update summary file" deploy_repo "${DEPLOY_REPO}"
+if ! ostree --repo="${DEPLOY_REPO}" summary -u; then
+    log_struc_error "Error updating summary" status "$?"
+    exit
+fi
 
-def compose_ostree():
-    print_log("Compose ostree")
-    time_fmt = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%S")
-    run_proc(
-        subprocess.list2cmdline(
-            [
-                "rpm-ostree",
-                "compose",
-                "tree",
-                "--unified-core",
-                f"--cachedir={CACHE_DIR}",
-                f"--repo={BUILD_REPO}",
-                f"--add-metadata-string=Build={time_fmt}",
-                WK_DIR.joinpath(args.get("--treefile")),
-            ]
-        )
-    )
-
-
-def sign_commit():
-    commit_id = subprocess.run(["ostree", f"--repo={DEPLOY_REPO}", "rev-parse", args.get("--ostree-branch")], capture_output=True, text=True)
-
-    with open(args.get("--gpg-passfile"), "r") as json_file:
-        gpg_data = json.loads(json_file.read())
-
-    print_log(f"Signing rpm-ostree commit {commit_id.stdout} with GPG key-id {gpg_data.get("gpg-id")}")
-
-    gpg_cmd = f"echo {gpg_data.get("passphrase")} | gpg --batch --always-trust --yes --passphrase-fd 0 --pinentry-mode=loopback -s $(mktemp)"
-    run_gpg_cmd = subprocess.Popen(gpg_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    output = run_gpg_cmd.communicate()[0]
-    if output:
-        print_log(f"Error unlocking GPG keyring: {output}")
-        exit(99)
-
-    run_proc(f"ostree --repo={DEPLOY_REPO} gpg-sign {commit_id.stdout} {gpg_data.get("gpg-id")}")
-
-
-def prepare_deploy():
-    print_log("Prune refs older than 30 days")
-    run_proc(
-        f"ostree --repo={BUILD_REPO} prune --refs-only --keep-younger-than='30 days ago'"
-    )
-
-    print_log("Pull new ostree commit into DEPLOY_REPO")
-    run_proc(
-        f"ostree --repo={DEPLOY_REPO} pull-local --depth=1 {BUILD_REPO} {args.get("--ostree-branch")}"
-    )
-
-    print_log("Remove local build repo")
-    shutil.rmtree(BUILD_REPO, ignore_errors=True)
-
-    print_log("Check filesystem for errors")
-    run_proc(f"ostree --repo={DEPLOY_REPO} fsck {args.get("--ostree-branch")}")
-
-
-def generate_deltas():
-    print_log("Check if main ref has parent")
-    check_parent = run_proc(
-        f"ostree --repo={DEPLOY_REPO} show {args.get("--ostree-branch")}", capture_output=True
-    )
-
-    if not check_parent.stderr:
-        print_log("Generate static delta from main ref's parent")
-        run_proc(
-            f"ostree --repo={DEPLOY_REPO} static-delta generate {args.get("--ostree-branch")}"
-        )
-
-        print_log("Check if main ref's parent has parent")
-        check_gparent = run_proc(
-            f"ostree --repo={DEPLOY_REPO} show {args.get("--ostree-branch")}^^",
-            capture_output=True,
-        )
-
-        if not check_gparent.stderr:
-            print_log("Generate static delta from parent of main ref's parent")
-            run_proc(
-                f"ostree --repo={DEPLOY_REPO} static-delta generate --from={args.get("--ostree-branch")}^^ --to={args.get("--ostree-branch")}"
-            )
-        else:
-            print_log("Main ref's parent has no parent. No deltas generated.")
-    else:
-        print_log("Main ref has no parent. No deltas generated.")
-
-
-def update_summary():
-    print_log("Update summary file of DEPLOY_REPO")
-    run_proc(f"ostree --repo={DEPLOY_REPO} summary -u")
-
-
-def deploy_repo():
-    print_log("Deploying repo to web server root")
-    if DEPLOY_REPO.exists():
-        run_proc(f"{BASE_DIR}/rsync-repos --src {DEPLOY_REPO} --dest {args.get("--dest-repo")}")
-    else:
-        print_log("DEPLOY_REPO not found. Not deploying to web server")
-
-
-if __name__ == "__main__":
-    args = docopt(__doc__, help=True, version="ostree-engine 0.1.0")
-    prepare_build_env()
-    compose_ostree()
-    prepare_deploy()
-    generate_deltas()
-    if args.get("--gpg-passfile"):
-        sign_commit()
-    update_summary()
-    if not args.get("--no-deploy"):
-        deploy_repo()
+# Deploy
+log_struc_info "Deploy to web server" deploy_repo "${DEPLOY_REPO}" dest_repo "${DEST_REPO}"
+if ! "$(pwd)/rsync-repos" --src "${DEPLOY_REPO}" --dest "${DEST_REPO}"; then
+    log_struc_error "Error deploying to web server" status "$?"
+    exit
+fi

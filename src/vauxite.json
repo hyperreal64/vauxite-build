@@ -22,16 +22,12 @@
     "copr:copr.fedorainfracloud.org:hyperreal:better_fonts"
   ],
   "add-files": [
-    [
-      "borgmatic-config.yaml",
-      "/etc/borgmatic/config.yaml"
-    ],
-    [
-      "user-dirs.defaults",
-      "/etc/xdg/user-dirs.defaults"
-    ]
+    ["borgmatic-config.yaml", "/etc/borgmatic/config.yaml"],
+    ["user-dirs.defaults", "/etc/xdg/user-dirs.defaults"],
+    ["borgmatic-2300.timer", "/etc/systemd/system/borgmatic-2300.timer"]
   ],
   "units": [
+    "borgmatic-2300.timer",
     "snapper-cleanup.timer",
     "snapper-timeline.timer"
   ],
