@@ -1,0 +1,30 @@
+#+title: vauxite-build
+
+This is my personalized Vauxite configuration. Vauxite is an unofficial Xfce variant of ostree-based Fedora. I'm currently working with Fedora developers to make it an official variant. There is already a sort-of-official treefile for Vauxite at https://pagure.io/workstation-ostree-config, as well as an experimental Vauxite container image hosted at https://quay.io/repository/fedora-ostree-desktops/vauxite.
+
+The ~vauxite.json~ treefile and ~xfce-desktop-pkgs.yaml~ under the ~src~ directory contain my personal customizations and differ from the [[https://pagure.io/workstation-ostree-config][upstream ones]]. As such, they may not be suitable for everyone.
+
+** How I use this repository
+- I run Fedora Server in a VM on my homelab machine. This Fedora Server has the ~ostree~ and ~rpm-ostree~ commands installed.
+- I clone this repository as root under ~/var/local/vauxite-build~.
+- I then run the ~ostree-engine~ script to build and deploy a new commit for the given reference branch (e.g. ~vauxite/f39/x86_64/main~). The ~rsync-repos~ command is used in the ~ostree-engine~ script to deploy the resulting OSTree repository to a web server root, which serves as the remote repository.
+
+  To add the repository as a remote on my local client machine:
+  #+begin_src shell
+  sudo ostree remote add --no-gpg-verify vauxite <URL of web server>
+  #+end_src
+
+  I then rebase to the vauxite branch:
+  #+begin_src shell
+  rpm-ostree rebase vauxite:vauxite/f39/x86_64/main
+  #+end_src
+
+  To build new commits that contain updates, I put this in ~/etc/cron.d/ostree-engine~ on the Fedora Server:
+  #+begin_src shell
+  0 0 * * 2 root /var/local/vauxite-build/ostree-engine
+  #+end_src
+
+  This will run the ~ostree-engine~ script every Tuesday at midnight. Then I can update my local client machine like this:
+  #+begin_src shell
+  rpm-ostree update
+  #+end_src
