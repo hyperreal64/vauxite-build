@@ -2,16 +2,15 @@
 
 set -euo pipefail
 
+CLEAN_BUILD=""
 SOURCE_BRANCH="f39"
 SOURCE_URL="https://pagure.io/workstation-ostree-config"
-OSTREE_BRANCH="vauxite/f39/x86_64/main"
 DEST_REPO="/srv/repo"
 OSTREE_FILES_DIR="$(pwd)/src"
 CACHE_DIR="$(pwd)/.cache"
 BUILD_REPO="$(pwd)/.build-repo"
 SOURCE_REPO="$(pwd)/.source-repo"
 TMP_WORK_DIR="$(pwd)/.tmp"
-DEPLOY_REPO="$(pwd)/.deploy-repo"
 TREEFILE="${TMP_WORK_DIR}/vauxite.json"
 
 if [ "$(id -u)" != "0" ]; then
@@ -44,8 +43,10 @@ rm -rf "${TMP_WORK_DIR}"
 log_struc_info "Clean /tmp/rpmostree*" files /tmp/rpmostree*
 rm -rf /tmp/rpmostree*
 
-log_struc_info "Clean build repo" directory "${BUILD_REPO}"
-rm -rf "${BUILD_REPO}"
+if [ -n "${CLEAN_BUILD}" ]; then
+    log_struc_info "Clean build repo" directory "${BUILD_REPO}"
+    rm -rf "${BUILD_REPO}"
+fi
 
 # Prepare build env
 log_struc_info "Ensure cache directory exists" directory "${CACHE_DIR}"
@@ -54,22 +55,10 @@ mkdir -p "${CACHE_DIR}"
 log_struc_info "Ensure temporary working directory exists" directory "${TMP_WORK_DIR}"
 mkdir -p "${TMP_WORK_DIR}"
 
-if [ -d "${DEPLOY_REPO}" ] && [ -n "$(ls "${DEPLOY_REPO}")" ]; then
-    log_info "Deploy repo found. Initialize ostree repo in bare-user mode."
-    if ! ostree --repo="${BUILD_REPO}" init --mode=bare-user; then
-        log_struc_error "Error initializing ostree repo in bare-user mode" status "$?"
-        exit 1
-    fi
-
-    log_info "Pull existing deploy repo into local build repo"
-    if ! ostree --repo="${BUILD_REPO}" pull-local --depth=2 "${DEPLOY_REPO}" "${OSTREE_BRANCH}"; then
-        log_struc_error "Error pulling existing deploy repo into local build repo" status "$?"
-        exit 1
-    fi
-else
-    log_info "Deploy repo not found. Initialize new deploy repo in archive mode."
+if [ ! -d "${BUILD_REPO}/objects" ]; then
+    log_info "Previous build repo not found. Initialize new build repo in archive mode"
     if ! ostree --repo="${BUILD_REPO}" init --mode=archive; then
-        log_struc_error "Error initializing new deploy repo in archive mode" status "$?"
+        log_struc_error "Error initializing new build repo in archive mode" status "$?"
         exit 1
     fi
 fi
@@ -104,31 +93,9 @@ if ! ostree --repo="${BUILD_REPO}" prune --refs-only --keep-younger-than='30 day
     exit 1
 fi
 
-log_struc_info "Pull new ostree commit into deploy repo" deploy_repo "${DEPLOY_REPO}"
-if ! ostree --repo="${DEPLOY_REPO}" pull-local --depth=1 "${BUILD_REPO}" "${OSTREE_BRANCH}"; then
-    log_struc_error "Error pulling new ostree commit into deploy repo" status "$?"
-    exit 1
-fi
-
-log_struc_info "Remove local build repo" build_repo "${BUILD_REPO}"
-rm -rf "${BUILD_REPO}"
-
-log_struc_info "Check filesystem for errors" deploy_repo "${DEPLOY_REPO}" ostree_branch "${OSTREE_BRANCH}"
-if ! ostree --repo="${DEPLOY_REPO}" fsck "${OSTREE_BRANCH}"; then
-    log_struc_error "Error checking filesystem for errors" status "$?"
-    exit 1
-fi
-
-# Update summary
-log_struc_info "Update summary file" deploy_repo "${DEPLOY_REPO}"
-if ! ostree --repo="${DEPLOY_REPO}" summary -u; then
-    log_struc_error "Error updating summary" status "$?"
-    exit 1
-fi
-
 # Deploy
-log_struc_info "Deploy to web server" deploy_repo "${DEPLOY_REPO}" dest_repo "${DEST_REPO}"
-if ! "$(pwd)/rsync-repos" --src "${DEPLOY_REPO}" --dest "${DEST_REPO}"; then
+log_struc_info "Deploy to web server" build_repo "${BUILD_REPO}" dest_repo "${DEST_REPO}"
+if ! "$(pwd)/rsync-repos" --src "${BUILD_REPO}" --dest "${DEST_REPO}"; then
     log_struc_error "Error deploying to web server" status "$?"
     exit 1
 fi
