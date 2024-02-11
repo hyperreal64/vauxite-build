@@ -24,10 +24,10 @@
   "add-files": [
     ["borgmatic-config.yaml", "/etc/borgmatic/config.yaml"],
     ["user-dirs.defaults", "/etc/xdg/user-dirs.defaults"],
-    ["borgmatic-2300.timer", "/usr/lib/systemd/system/borgmatic-2300.timer"]
+    ["borgmatic.timer", "/usr/lib/systemd/system/borgmatic.timer"]
   ],
   "units": [
-    "borgmatic-2300.timer",
+    "borgmatic.timer",
     "snapper-cleanup.timer",
     "snapper-timeline.timer"
   ],
